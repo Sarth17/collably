@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./collably.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.acycfmymrsrkuniokauu:[YOUR-DATABASE-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres")
 
 connect_args = (
     {"check_same_thread": False}
