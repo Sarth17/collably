@@ -34,7 +34,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Collably API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
-UPLOAD_DIR = Path(os.getenv("COLLABLY_UPLOAD_DIR", "./uploads")).resolve()
+UPLOAD_DIR = Path("/tmp/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 bearer = HTTPBearer(auto_error=False)
