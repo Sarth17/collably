@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowUpRight, BadgeCheck, CalendarDays, Clock3, Search, Sparkles, TrendingUp, Users } from 'lucide-react'
-import { brandOf, camp, useStore } from '../store'
+import { brandOf, camp, MAX_UPLOAD_MB, useStore } from '../store'
 import { Badge, Empty, PageHeader, Stat, fmt$, fmtD } from '../ui'
 import type { Collab, Deliverable } from '../types'
 
@@ -30,7 +30,7 @@ export function CreatorDash() {
       <div className="creator-dashboard-grid">
         <section className="brand-panel creator-panel">
           <div className="brand-panel-head"><div><span className="brand-overline">YOUR CURRENT WORK</span><h2>Active collaborations</h2></div><span className="brand-count-pill">{live.length} ongoing</span></div>
-          {live.length ? <div className="creator-work-list">{live.slice(0,5).map(l => { const { k, b } = info(l); const items = s.deliverables.filter(d => d.collabId === l.id); const completedItems = items.filter(d => d.status === 'approved' || d.status === 'completed').length; const progress = items.length ? Math.round(completedItems/items.length*100) : 0; return <Link key={l.id} to={`/creator/collaborations/${l.id}`} className="creator-work-row"><span className="creator-work-mark"><Sparkles size={17}/></span><span className="creator-work-main"><span className="creator-work-title"><strong>{k.name}</strong><Badge s={l.status}/></span><small>{b.name} · due {fmtD(k.deadline)}</small><span className="brand-progress-track"><span style={{width: `${progress}%`}}/></span></span><span className="creator-progress-value">{progress}%</span></Link> })}</div> : <div className="brand-empty"><span className="brand-empty-icon"><Sparkles size={21}/></span><strong>Your next collaboration starts here</strong><p>Explore campaigns and find brands that match your content and style.</p><Link className="btn btn-p" to="/creator/campaigns">Discover campaigns <ArrowUpRight size={15}/></Link></div>}
+          {live.length ? <div className="creator-work-list">{live.slice(0,5).map(l => { const { k, b } = info(l); const items = s.deliverables.filter(d => d.collabId === l.id); const completedItems = items.filter(d => d.status === 'approved').length; const progress = items.length ? Math.round(completedItems/items.length*100) : 0; return <Link key={l.id} to={`/creator/collaborations/${l.id}`} className="creator-work-row"><span className="creator-work-mark"><Sparkles size={17}/></span><span className="creator-work-main"><span className="creator-work-title"><strong>{k.name}</strong><Badge s={l.status}/></span><small>{b.name} · due {fmtD(k.deadline)}</small><span className="brand-progress-track"><span style={{width: `${progress}%`}}/></span></span><span className="creator-progress-value">{progress}%</span></Link> })}</div> : <div className="brand-empty"><span className="brand-empty-icon"><Sparkles size={21}/></span><strong>Your next collaboration starts here</strong><p>Explore campaigns and find brands that match your content and style.</p><Link className="btn btn-p" to="/creator/campaigns">Discover campaigns <ArrowUpRight size={15}/></Link></div>}
         </section>
         <section className="brand-panel creator-attention-panel">
           <div className="brand-panel-head"><div><span className="brand-overline">DON'T MISS A THING</span><h2>Invitations</h2></div><span className="brand-count-pill">{pend.length} new</span></div>
@@ -57,10 +57,12 @@ function SubmitRow({ d }: { d: Deliverable }) {
   const send = async () => {
     if (!file && !/^https?:\/\/\S+$/.test(url)) { setErr('Enter a valid link or attach a file.'); return }
     setErr(''); setUploading(true)
-    const submittedUrl = file ? await a.uploadFile(file) : url
-    setUploading(false)
-    if (!submittedUrl) return
-    a.submit(d.id, submittedUrl, notes.trim())
+    try {
+      const submittedUrl = file ? await a.uploadFile(file) : url
+      if (submittedUrl) await a.submit(d.id, submittedUrl, notes.trim())
+    } finally {
+      setUploading(false)
+    }
   }
   return (
     <div className="card mt-3 text-sm">
@@ -69,7 +71,7 @@ function SubmitRow({ d }: { d: Deliverable }) {
       {open ? (
         <div className="mt-3 space-y-2">
           <label className="block">Content URL<input className="input mt-1" placeholder="https://" value={url} onChange={e => setUrl(e.target.value)} /></label>
-          <label className="block">Upload deliverable (image, video or PDF; max 25 MB)<input className="input mt-1" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,application/pdf" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+          <label className="block">Upload deliverable (image, video or PDF, max {MAX_UPLOAD_MB} MB)<input className="input mt-1" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,application/pdf" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
         {file && <p className="text-xs text-muted">Selected: {file.name}</p>}
         <label className="block">Notes for the brand<textarea className="input mt-1" rows={2} value={notes} onChange={e => setNotes(e.target.value)} /></label>
           {err && <p role="alert" className="text-red-600">{err}</p>}

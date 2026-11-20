@@ -1,24 +1,37 @@
 """Database tables. Column names mirror the frontend's JSON keys so rows can be sent as they are.
 Set DATABASE_URL to a PostgreSQL URL (for example postgresql+psycopg://user:pass@host/db) to leave SQLite."""
 import os
-from sqlalchemy import create_engine
-from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, String, create_engine
+from pathlib import Path
+
+from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, LargeBinary, String, create_engine
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import NullPool
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.acycfmymrsrkuniokauu:[Sarth@17]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres")
+DATABASE_URL = os.getenv("DATABASE_URL")
+ON_VERCEL = os.getenv("VERCEL") == "1"
+if ON_VERCEL and not DATABASE_URL:
+    raise RuntimeError("Set DATABASE_URL to the Neon PostgreSQL connection on Vercel")
 
-connect_args = (
-    {"check_same_thread": False}
-    if DATABASE_URL.startswith("sqlite")
-    else {}
+url = (
+    make_url(DATABASE_URL)
+    if DATABASE_URL
+    else URL.create("sqlite", database=str(Path(__file__).with_name("collably.db")))
 )
+if url.drivername in {"postgres", "postgresql"}:
+    url = url.set(drivername="postgresql+psycopg")
+if ON_VERCEL and url.get_backend_name() != "postgresql":
+    raise RuntimeError("DATABASE_URL must point to PostgreSQL on Vercel")
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=True,
-)
+engine_options = {}
+if url.get_backend_name() == "sqlite":
+    engine_options["connect_args"] = {"check_same_thread": False}
+elif ON_VERCEL:
+    # Neon pools the hosted connections. Avoid a second pool in each serverless instance.
+    engine_options["poolclass"] = NullPool
+    engine_options["connect_args"] = {"connect_timeout": 10}
 
+engine = create_engine(url, pool_pre_ping=True, **engine_options)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 Base = declarative_base()
@@ -39,3 +52,10 @@ class Portfolio(Base): __tablename__ = "portfolio"; id = S(primary_key=True); cr
 class Saved(Base): __tablename__ = "saved"; brandId = S(ForeignKey("brands.id"), primary_key=True); creatorId = S(ForeignKey("creators.id"), primary_key=True)
 
 class EmailToken(Base): __tablename__ = "email_tokens"; id = S(primary_key=True); userId = S(ForeignKey("users.id"), nullable=False, index=True); tokenHash = S(unique=True, nullable=False, index=True); purpose = S(nullable=False); expiresAt = S(nullable=False); used = Column(Boolean, default=False, nullable=False)
+
+
+class Upload(Base):
+    __tablename__ = "uploads"
+    filename = S(primary_key=True)
+    content_type = S(nullable=False)
+    content = Column(LargeBinary, nullable=False)

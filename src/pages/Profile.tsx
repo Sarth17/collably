@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { BadgeCheck, Bookmark, BookmarkCheck, Pencil, Plus, Trash2 } from 'lucide-react'
-import { brandData, brandOf, camp, useStore } from '../store'
+import { brandData, brandOf, camp, MAX_UPLOAD_MB, useStore } from '../store'
 import { Avatar, Badge, Empty, PageHeader, Stat, fmtN } from '../ui'
 import type { PortfolioItem } from '../types'
 
@@ -85,13 +85,19 @@ function PortfolioForm({ item, onClose }: { item?: PortfolioItem; onClose: () =>
   const [err, setErr] = useState('')
   const set = (k: string) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value })
   const save = async () => {
-    if (!f.title.trim() || (!file && !/^https?:\/\/\S+$/.test(f.url))) { setErr('Add a title and either a valid link or upload a file.'); return }
+    if (!f.title.trim() || (!file && !/^https?:\/\/\S+$/.test(f.url) && !(item?.url === f.url && f.url.startsWith('/uploads/')))) {
+      setErr('Add a title and either a valid link or upload a file.')
+      return
+    }
     setErr(''); setUploading(true)
-    const uploadedUrl = file ? await a.uploadFile(file) : f.url
-    setUploading(false)
-    if (!uploadedUrl) return
-    a.savePortfolio({ ...f, url: uploadedUrl, title: f.title.trim(), id: item?.id })
-    onClose()
+    try {
+      const uploadedUrl = file ? await a.uploadFile(file) : f.url
+      if (!uploadedUrl) return
+      const saved = await a.savePortfolio({ ...f, url: uploadedUrl, title: f.title.trim(), id: item?.id })
+      if (saved) onClose()
+    } finally {
+      setUploading(false)
+    }
   }
   return (
     <div className="card mb-4 space-y-3 text-sm">
@@ -103,7 +109,7 @@ function PortfolioForm({ item, onClose }: { item?: PortfolioItem; onClose: () =>
         <label className="block">Platform<select className="input mt-1" value={f.platform} onChange={set('platform')}>{PLATFORMS.map(p => <option key={p}>{p}</option>)}</select></label>
       </div>
       <label className="block">Content URL (optional if uploading)<input className="input mt-1" placeholder="https://" value={f.url} onChange={set('url')} /></label>
-      <label className="block">Upload portfolio media (image, video or PDF; max 25 MB)<input className="input mt-1" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,application/pdf" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
+      <label className="block">Upload portfolio media (image, video or PDF, max {MAX_UPLOAD_MB} MB)<input className="input mt-1" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,application/pdf" onChange={e => setFile(e.target.files?.[0] ?? null)} /></label>
       {file && <p className="text-xs text-muted">Selected: {file.name} ({Math.ceil(file.size / 1024)} KB)</p>}
       {err && <p role="alert" className="text-red-600">{err}</p>}
       <div className="flex gap-2"><button className="btn btn-p" disabled={uploading} onClick={save}>{uploading ? 'Uploading…' : 'Save item'}</button><button className="btn" onClick={onClose}>Cancel</button></div>

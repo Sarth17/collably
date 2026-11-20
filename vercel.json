@@ -7,6 +7,7 @@
     },
     "backend": {
       "root": "backend",
+      "entrypoint": "main:app",
       "framework": "fastapi"
     }
   },
@@ -16,12 +17,24 @@
       "destination": {
         "service": "backend"
       }
-    }
-  ,
+    },
+    {
+      "source": "/uploads/(.*)",
+      "destination": {
+        "service": "backend"
+      }
+    },
+    {
+      "source": "/assets/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    },
     {
       "source": "/(.*)",
       "destination": {
-        "service": "app"
+        "service": "app",
+        "path": "/index.html"
       }
     }
   ]

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Bell, Check, Images, Megaphone, MessageCircle, Search, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useStore } from '../store'
+import { SHOW_DEMO, useStore } from '../store'
 import type { Role } from '../types'
 
 function Preview() {
@@ -69,7 +69,19 @@ export function Login() {
   const nav = useNavigate()
   const [f, setF] = useState({ email: '', password: '' })
   const [verifyNotice, setVerifyNotice] = useState('')
-  const resend = async () => { if (!f.email.includes('@')) { setVerifyNotice('Enter your email above first.'); return } try { await fetch('/api/auth/resend-verification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.email }) }); setVerifyNotice('If this account needs verification, a new link has been sent.') } catch { setVerifyNotice('Unable to send email right now. Try again later.') } }
+  const resend = async () => {
+    if (!f.email.includes('@')) { setVerifyNotice('Enter your email above first.'); return }
+    try {
+      const response = await fetch('/api/auth/resend-verification', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.email }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || 'Unable to send email right now.')
+      }
+      setVerifyNotice('If this account needs verification, a new link has been sent.')
+    } catch (error) { setVerifyNotice((error as Error).message) }
+  }
   // The route guard sends each role to its own dashboard, so any dashboard path works here.
   const enter = async (ok: Promise<boolean>) => { if (await ok) nav('/brand/dashboard') }
   return (
@@ -82,7 +94,7 @@ export function Login() {
         <p className="text-muted"><Link className="text-accent underline" to="/forgot-password">Forgot password?</Link> Or <Link className="text-accent underline" to="/register">create an account</Link>.</p>
         <button type="button" className="text-accent underline" onClick={resend}>Resend verification email</button>{verifyNotice && <p className="text-muted">{verifyNotice}</p>}
       </form>
-      <p className="mt-8 text-sm font-medium">Or try a demo account (password demo1234)</p>
+      {SHOW_DEMO && <><p className="mt-8 text-sm font-medium">Or try a demo account (password demo1234)</p>
       <div className="mt-3 space-y-3">
         {(['brand', 'creator', 'admin'] as Role[]).map(r => (
           <button key={r} className="card block w-full text-left" onClick={() => enter(a.demoLogin(r))}>
@@ -90,7 +102,7 @@ export function Login() {
             <span className="block text-sm text-muted">demo-{r}@collably.test</span>
           </button>
         ))}
-      </div>
+      </div></>}
     </div>
   )
 }
@@ -101,18 +113,19 @@ export function Register() {
   const [role, setRole] = useState<'brand' | 'creator'>('brand')
   const [f, setF] = useState({ name: '', email: '', password: '' })
   const [err, setErr] = useState('')
-  const [done, setDone] = useState(false)
-  const [emailSent, setEmailSent] = useState(false)
+  const [result, setResult] = useState<{ verificationRequired: boolean, emailSent: boolean } | null>(null)
+  const [submitting, setSubmitting] = useState(false)
   const submit = async () => {
     setErr('')
     if (!f.name.trim() || !f.email.includes('@') || f.password.length < 8) { setErr('Enter your name, a valid email and a password of at least 8 characters.'); return }
+    setSubmitting(true)
     try {
       const res = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role, name: f.name.trim(), email: f.email.trim(), password: f.password }) })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Registration failed')
-      setEmailSent(Boolean(data.emailSent))
-      setDone(true)
+      setResult(data)
     } catch (e) { setErr((e as Error).message) }
+    finally { setSubmitting(false) }
   }
   const roles: ['brand' | 'creator', string, string][] = [
     ['brand', 'Brand', 'Find creators, run campaigns and review their work.'],
@@ -121,12 +134,17 @@ export function Register() {
   return (
     <div className="mx-auto mt-16 max-w-md px-6">
       <h1 className="text-2xl font-semibold">Create your account</h1>
-      {done ? <div className="mt-6 card"><h2 className="font-semibold">Check your email</h2><p className="mt-2 text-sm text-muted">{emailSent ? `We sent a verification link to ${f.email}. Verify your email before signing in.` : `Email delivery is not configured yet. For local development, the verification link is printed in the backend terminal for ${f.email}.`}</p><button className="btn btn-p mt-4" onClick={() => nav('/login')}>Go to sign in</button></div> : <>
-      <p className="mt-1 text-sm text-muted">Your account will be saved in Collably after email verification.</p>
+      {result ? <div className="mt-6 card">
+        <h2 className="font-semibold">{result.verificationRequired ? 'Verify your email' : 'Account created'}</h2>
+        <p className="mt-2 text-sm text-muted">{result.emailSent
+          ? `We sent a verification link to ${f.email}. Verify your email before signing in.`
+          : result.verificationRequired ? 'Request a new verification email on the sign-in page.' : 'You can now sign in to Collably.'}</p>
+        <button className="btn btn-p mt-4" onClick={() => nav('/login')}>Go to sign in</button>
+      </div> : <>
       <fieldset className="mt-6 grid gap-3"><legend className="mb-2 text-sm font-medium">I am joining as</legend>{roles.map(([r, t, d]) => (
         <label key={r} className={`card cursor-pointer ${role === r ? 'border-accent' : ''}`}><input type="radio" name="role" className="mr-2" checked={role === r} onChange={() => setRole(r)} /><b>{t}</b><span className="block text-sm text-muted">{d}</span></label>
       ))}</fieldset>
-      <div className="mt-4 space-y-3 text-sm"><label className="block">Full name<input className="input mt-1" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></label><label className="block">Email<input type="email" className="input mt-1" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} /></label><label className="block">Password<input type="password" className="input mt-1" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} /></label>{err && <p role="alert" className="text-red-600">{err}</p>}<button className="btn btn-p w-full justify-center" onClick={submit}>Create account</button><p className="text-muted">Already registered? <Link className="text-accent underline" to="/login">Sign in</Link></p></div></>}
+      <div className="mt-4 space-y-3 text-sm"><label className="block">Full name<input className="input mt-1" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></label><label className="block">Email<input type="email" className="input mt-1" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} /></label><label className="block">Password<input type="password" className="input mt-1" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} /></label>{err && <p role="alert" className="text-red-600">{err}</p>}<button className="btn btn-p w-full justify-center" disabled={submitting} onClick={submit}>Create account</button><p className="text-muted">Already registered? <Link className="text-accent underline" to="/login">Sign in</Link></p></div></>}
     </div>
   )
 }
@@ -139,7 +157,14 @@ export function ForgotPassword() {
   const send = async () => {
     setErr('')
     if (!email.includes('@')) { setErr('Enter a valid email address.'); return }
-    try { const r = await fetch('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }); if (!r.ok) throw new Error('Could not send reset request. Try again.'); setSent(true) } catch (e) { setErr((e as Error).message) }
+    try {
+      const response = await fetch('/api/auth/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || 'Could not send reset request. Try again.')
+      }
+      setSent(true)
+    } catch (e) { setErr((e as Error).message) }
   }
   return <div className="mx-auto mt-24 max-w-md px-6 text-sm"><h1 className="text-2xl font-semibold">Reset your password</h1>{sent ? <p className="mt-4 card">If an account exists for {email}, a password-reset email has been sent.</p> : <div className="mt-4 space-y-3"><label className="block">Email<input type="email" className="input mt-1" value={email} onChange={e => setEmail(e.target.value)} /></label>{err && <p role="alert" className="text-red-600">{err}</p>}<button className="btn btn-p" onClick={send}>Send reset link</button></div>}<p className="mt-4"><Link className="text-accent underline" to="/login">Back to sign in</Link></p></div>
 }
@@ -148,7 +173,18 @@ export function ForgotPassword() {
 export function VerifyEmail() {
   const [message, setMessage] = useState('Verifying your email…')
   const [error, setError] = useState(false)
-  useEffect(() => { const token = new URLSearchParams(window.location.search).get('token'); if (!token) { setMessage('Verification link is missing.'); setError(true); return } fetch(`/api/auth/verify-email?token=${encodeURIComponent(token)}`).then(async r => { const data = await r.json().catch(() => ({})); if (!r.ok) throw new Error(data.detail || 'Verification failed'); setMessage('Your email is verified. You can now sign in to Collably.') }).catch(e => { setMessage((e as Error).message); setError(true) }) }, [])
+  const started = useRef(false)
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    const token = new URLSearchParams(window.location.search).get('token')
+    if (!token) { setMessage('Verification link is missing.'); setError(true); return }
+    fetch(`/api/auth/verify-email?token=${encodeURIComponent(token)}`).then(async response => {
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Verification failed')
+      setMessage('Your email is verified. You can now sign in to Collably.')
+    }).catch(e => { setMessage((e as Error).message); setError(true) })
+  }, [])
   return <div className="mx-auto mt-24 max-w-md px-6"><div className="card"><h1 className="text-xl font-semibold">Email verification</h1><p className={`mt-3 ${error ? 'text-red-600' : 'text-muted'}`}>{message}</p><Link className="btn btn-p mt-5 inline-flex" to="/login">Go to sign in</Link></div></div>
 }
 

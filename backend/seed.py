@@ -1,6 +1,15 @@
-"""Sample data (fictional). init() seeds an empty database; reset() wipes and reseeds (development only)."""
-from db import Base, Brand, Campaign, Collab, Creator, Deliverable, Message, Notice, Portfolio, Report, Saved, SessionLocal, User, EmailToken, engine
+"""Initialize the schema and populate the local development demo."""
+import os
+from collections import defaultdict
+
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Session
+
+from db import Base, Brand, Campaign, Collab, Creator, Deliverable, Message, Notice, Portfolio, Report, Saved, User, engine
 from security import hash_pw
+
+DEMO_ENABLED = os.getenv("VERCEL") != "1" and os.getenv("COLLABLY_DEV", "1") == "1"
 
 RAW = [
     ("Priya Mehta", "priyamehta", "Beauty", "Mumbai", ["Instagram", "YouTube"], 182000, 5.4, "Skincare routines and honest product reviews."),
@@ -60,34 +69,57 @@ def rows():
     return out
 
 
-def init():
-    Base.metadata.create_all(engine)
-    # Lightweight forward-compatible migration for databases created before profile fields existed.
-    from sqlalchemy import inspect, text
-    inspector = inspect(engine)
-    cols = {c["name"] for c in inspector.get_columns("creators")}
+def init_schema(conn: Connection) -> None:
+    Base.metadata.create_all(conn)
+    inspector = inspect(conn)
     migrations = {
-        "rateMin": "INTEGER DEFAULT 0",
-        "rateMax": "INTEGER DEFAULT 0",
-        "profileCompleted": "BOOLEAN DEFAULT 0",
-        "metricsSelfReported": "BOOLEAN DEFAULT 1",
+        "creators": {
+            "rateMin": "INTEGER DEFAULT 0",
+            "rateMax": "INTEGER DEFAULT 0",
+            "profileCompleted": "BOOLEAN DEFAULT FALSE",
+            "metricsSelfReported": "BOOLEAN DEFAULT TRUE",
+        },
+        "users": {"emailVerified": "BOOLEAN DEFAULT FALSE NOT NULL"},
     }
-    with engine.begin() as conn:
-        for col, definition in migrations.items():
-            if col not in cols:
-                conn.execute(text(f"ALTER TABLE creators ADD COLUMN {col} {definition}"))
-    user_cols = {c["name"] for c in inspect(engine).get_columns("users")}
-    with engine.begin() as conn:
-        if "emailVerified" not in user_cols:
-            conn.execute(text("ALTER TABLE users ADD COLUMN emailVerified BOOLEAN DEFAULT 0 NOT NULL"))
-        conn.execute(text("UPDATE users SET emailVerified = 1 WHERE email LIKE 'demo-%@collably.test'"))
-    with SessionLocal() as db:
+    for table, additions in migrations.items():
+        existing = {col["name"].lower(): col["name"] for col in inspector.get_columns(table)}
+        for column, definition in additions.items():
+            previous = existing.get(column.lower())
+            if previous and previous != column and conn.dialect.name == "postgresql":
+                conn.execute(text(f'ALTER TABLE {table} RENAME COLUMN "{previous}" TO "{column}"'))
+            if not previous:
+                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN "{column}" {definition}'))
+                if column == "emailVerified":
+                    conn.execute(User.__table__.update().where(
+                        User.email.like("demo-%@collably.test")
+                    ).values(emailVerified=True))
+
+
+def seed_demo(conn: Connection) -> None:
+    with Session(bind=conn) as db:
         if db.query(User).count():
             return
-        db.add_all(rows())
+        table_rows = defaultdict(list)
+        for row in rows():
+            table_rows[row.__table__].append(row)
+        for table in Base.metadata.sorted_tables:
+            db.add_all(table_rows[table])
+            db.flush()
         db.commit()
 
 
+def init():
+    with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            # Concurrent Vercel cold starts share this schema.
+            conn.execute(text("SELECT pg_advisory_xact_lock(615083410)"))
+        init_schema(conn)
+        if DEMO_ENABLED:
+            seed_demo(conn)
+
+
 def reset():
-    Base.metadata.drop_all(engine)
-    init()
+    with engine.begin() as conn:
+        Base.metadata.drop_all(conn)
+        init_schema(conn)
+        seed_demo(conn)

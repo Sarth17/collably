@@ -6,7 +6,10 @@ import time
 
 import jwt
 
-SECRET = os.getenv("COLLABLY_SECRET", "local-development-secret-change-this-before-deployment-please-1234567890")  # set a long random value in production
+SECRET = os.getenv("COLLABLY_SECRET")
+if os.getenv("VERCEL") == "1" and len(SECRET or "") < 32:
+    raise RuntimeError("Set COLLABLY_SECRET to at least 32 characters on Vercel")
+SECRET = SECRET or "local-development-secret-change-this-before-deployment-please-1234567890"
 
 
 def hash_pw(pw: str, salt: str | None = None) -> str:

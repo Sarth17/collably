@@ -1,27 +1,26 @@
 """Collably API. Run with: uvicorn main:app --reload --port 8000   (interactive docs at /docs)"""
 import os
 import uuid
-import shutil
 import secrets
 import hashlib
 from html import escape as html_escape
-from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone, timedelta
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 load_dotenv()
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import seed
-from db import Brand, Campaign, Collab, Creator, Deliverable, Message, Notice, Portfolio, Report, Saved, SessionLocal, User, EmailToken
+from db import Brand, Campaign, Collab, Creator, Deliverable, EmailToken, Message, Notice, ON_VERCEL, Portfolio, Report, Saved, SessionLocal, Upload, User
 from security import check_pw, decode_token, hash_pw, make_token
 from email_service import send_email
 
@@ -34,11 +33,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Collably API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
-UPLOAD_DIR = Path("/tmp/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 bearer = HTTPBearer(auto_error=False)
-url_pattern = r"^https?://\S+$"
 
 
 def now() -> str:
@@ -46,7 +41,9 @@ def now() -> str:
 
 
 def frontend_url(path: str) -> str:
-    return os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/") + path
+    host = os.getenv("VERCEL_PROJECT_PRODUCTION_URL") if os.getenv("VERCEL_ENV") == "production" else os.getenv("VERCEL_URL")
+    base = os.getenv("FRONTEND_URL") or (f"https://{host}" if host else "http://localhost:5173")
+    return base.rstrip("/") + path
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
@@ -60,7 +57,11 @@ def create_email_token(db: Session, user: User, purpose: str) -> str:
     return raw
 
 def consume_email_token(db: Session, raw: str, purpose: str) -> User | None:
-    row = db.query(EmailToken).filter(EmailToken.tokenHash == token_hash(raw), EmailToken.purpose == purpose, EmailToken.used == False).first()
+    row = db.query(EmailToken).filter(
+        EmailToken.tokenHash == token_hash(raw),
+        EmailToken.purpose == purpose,
+        EmailToken.used.is_(False),
+    ).with_for_update().first()
     if not row:
         return None
     try:
@@ -102,26 +103,59 @@ def me(creds: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session
 U, DB = Depends(me), Depends(get_db)
 
 
-# ---------- file uploads (local MVP storage; replace with cloud storage for production) ----------
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+@app.get("/api/health")
+def health(db: Session = DB):
+    db.execute(text("SELECT 1"))
+    return {"ok": True}
+
+
+# ---------- file uploads ----------
+MAX_UPLOAD_MB = 4 if ON_VERCEL else 25
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 ALLOWED_UPLOAD_TYPES = {
-    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
-    "image/gif": ".gif", "video/mp4": ".mp4", "video/webm": ".webm",
-    "application/pdf": ".pdf",
+    "image/jpeg": (".jpg", 0, (b"\xff\xd8\xff",)),
+    "image/png": (".png", 0, (b"\x89PNG\r\n\x1a\n",)),
+    "image/webp": (".webp", 8, (b"WEBP",)),
+    "image/gif": (".gif", 0, (b"GIF87a", b"GIF89a")),
+    "video/mp4": (".mp4", 4, (b"ftyp",)),
+    "video/webm": (".webm", 0, (b"\x1a\x45\xdf\xa3",)),
+    "application/pdf": (".pdf", 0, (b"%PDF-",)),
 }
 
-'''
-@app.post("/api/auth/login")
-def login(b: LoginIn, db: Session = DB):
-    u = db.query(User).filter(User.email == b.email.strip().lower()).first()
-    if not u or not check_pw(b.password, u.passwordHash):
-        raise HTTPException(401, "Wrong email or password")
-    return {"token": make_token(u.id)}
-'''
 
 def need(u: User, *roles: str) -> None:
     if u.role not in roles:
         raise HTTPException(403, "Your role cannot do this")
+
+
+@app.post("/api/uploads")
+def upload_file(file: UploadFile = File(), u: User = U, db: Session = DB):
+    need(u, "creator")
+    content_type = file.content_type
+    file_type = ALLOWED_UPLOAD_TYPES.get(content_type)
+    if file_type is None:
+        raise HTTPException(400, "Upload a supported image, video, or PDF")
+    content = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"Files must be {MAX_UPLOAD_MB} MB or smaller")
+    extension, offset, signatures = file_type
+    if not content.startswith(signatures, offset) or (content_type == "image/webp" and not content.startswith(b"RIFF")):
+        raise HTTPException(400, "The file contents do not match the selected format")
+    filename = f"{uuid.uuid4().hex}{extension}"
+    db.add(Upload(filename=filename, content_type=content_type, content=content))
+    db.commit()
+    return {"filename": filename, "url": f"/uploads/{filename}"}
+
+
+@app.get("/uploads/{filename}")
+def uploaded_file(filename: str, db: Session = DB):
+    upload = db.get(Upload, filename)
+    if upload is None:
+        raise HTTPException(404, "File not found")
+    return Response(upload.content, media_type=upload.content_type, headers={
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox",
+    })
 
 
 def d(o) -> dict:
@@ -191,11 +225,6 @@ def invite(db: Session, kid: str, creator_id: str) -> None:
 
 
 # ---------- auth ----------
-class LoginIn(BaseModel):
-    email: str
-    password: str
-
-
 class RegisterIn(BaseModel):
     role: Literal["brand", "creator"]
     name: str = Field(min_length=1, max_length=80)
@@ -215,12 +244,14 @@ def login(b: LoginIn, db: Session = DB):
     if not u or not check_pw(b.password, u.passwordHash):
         raise HTTPException(401, "Wrong email or password")
 
+    if os.getenv("RESEND_API_KEY") and not u.emailVerified:
+        raise HTTPException(403, "Verify your email before signing in")
     return {"token": make_token(u.id)}
 
 @app.post("/api/auth/register")
 def register(b: RegisterIn, db: Session = DB):
     email = b.email.strip().lower()
-    if "@" not in email:
+    if email.count("@") != 1 or not all(email.split("@")) or any(c.isspace() for c in email):
         raise HTTPException(400, "Enter a valid email address")
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(409, "That email is already registered")
@@ -229,10 +260,18 @@ def register(b: RegisterIn, db: Session = DB):
         db.add(Brand(id=pid, name=b.name.strip(), industry="General", status="active"))
     else:
         db.add(Creator(id=pid, name=b.name.strip(), handle=email.split("@")[0], niche="General", location="", platforms=[], followers=0, engagement=0.0, bio="", verified=False, status="active", rateMin=0, rateMax=0, profileCompleted=False, metricsSelfReported=True))
-    user = User(id=uid("u"), email=email, passwordHash=hash_pw(b.password), role=b.role, profileId=pid, emailVerified=True)
+    user = User(id=uid("u"), email=email, passwordHash=hash_pw(b.password), role=b.role, profileId=pid)
     db.add(user)
-    db.commit()
-    return {"ok": True, "emailSent": False}
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(409, "That email is already registered")
+        raise
+    verification_required = bool(os.getenv("RESEND_API_KEY"))
+    email_sent = send_verification(db, user) if verification_required else False
+    return {"ok": True, "verificationRequired": verification_required, "emailSent": email_sent}
 
 @app.get("/api/auth/verify-email")
 def verify_email(token: str, db: Session = DB):
@@ -248,19 +287,29 @@ class EmailOnly(BaseModel):
     email: str
 
 
+def send_verification(db: Session, user: User) -> bool:
+    raw = create_email_token(db, user, "verify")
+    link = frontend_url(f"/verify-email?token={raw}")
+    return send_email(user.email, "Verify your Collably email", email_link_html(
+        "Verify your email", "Confirm your email address to activate Collably.", link, "Verify email"
+    ))
+
+
 @app.post("/api/auth/resend-verification")
 def resend_verification(b: EmailOnly, db: Session = DB):
+    if not os.getenv("RESEND_API_KEY"):
+        raise HTTPException(503, "Verification email delivery is unavailable")
     user = db.query(User).filter(User.email == b.email.strip().lower()).first()
     if user and not user.emailVerified:
-        raw = create_email_token(db, user, "verify")
-        link = frontend_url(f"/verify-email?token={raw}")
-        send_email(user.email, "Verify your Collably email", email_link_html("Verify your email", "Confirm your email address to activate Collably.", link, "Verify email"))
+        send_verification(db, user)
     return {"ok": True}
 
 
 
 @app.post("/api/auth/forgot-password")
 def forgot_password(b: EmailOnly, db: Session = DB):
+    if not os.getenv("RESEND_API_KEY"):
+        raise HTTPException(503, "Password reset email delivery is unavailable")
     user = db.query(User).filter(User.email == b.email.strip().lower()).first()
     if user:
         raw = create_email_token(db, user, "reset")
@@ -592,7 +641,7 @@ def close_report(rid: str, b: ReportIn, u: User = U, db: Session = DB):
 @app.post("/api/dev/reset")
 def dev_reset():
     """Restores the sample data. Disabled when COLLABLY_DEV is not 1."""
-    if os.getenv("COLLABLY_DEV", "1") != "1":
+    if not seed.DEMO_ENABLED:
         raise HTTPException(404, "Not found")
     seed.reset()
     return {"ok": True}

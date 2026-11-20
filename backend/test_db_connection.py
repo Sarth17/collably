@@ -1,9 +1,8 @@
-from db import engine
+if __name__ == "__main__":
+    from sqlalchemy import text
 
-try:
+    from db import engine
+
     with engine.connect() as connection:
-        print("Successfully connected to Supabase PostgreSQL!")
-        print("Database:", connection.dialect.name)
-except Exception as e:
-    print("Database connection failed:")
-    print(e)
+        connection.execute(text("SELECT 1"))
+        print(f"Connected to {connection.dialect.name}.")

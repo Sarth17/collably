@@ -1,7 +1,7 @@
 import { Link, Navigate, NavLink, Outlet, Route, Routes, useNavigate, useLocation } from 'react-router-dom'
 import { Bell, Compass, Contact, Flag, Handshake, Images, LayoutDashboard, Megaphone, MessageCircle, Settings as Cog, Users, type LucideIcon } from 'lucide-react'
 import { Avatar } from './ui'
-import { resetDemo, useStore } from './store'
+import { resetDemo, SHOW_DEMO, useStore } from './store'
 import type { Role } from './types'
 import { ForgotPassword, Landing, Login, Register, VerifyEmail, ResetPassword } from './pages/Public'
 import { CreatorProfile, PortfolioPage, Settings, CreatorSetup } from './pages/Profile'
@@ -50,10 +50,12 @@ function Shell() {
         <header className="shell-header flex flex-wrap items-center justify-between gap-2 px-6 py-4">
           <p className="font-display text-lg font-semibold">Good {h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening'}, {me.split(' ')[0]}</p>
           <span className="shell-actions flex gap-2">
-            <select aria-label="Switch demo role" className="btn" value={ses.role} onChange={async e => { const r = e.target.value as Role; if (await a.demoLogin(r)) nav(`/${r}/dashboard`) }}>
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <button className="btn" onClick={resetDemo}>Reset demo</button>
+            {SHOW_DEMO && <>
+              <select aria-label="Switch demo role" className="btn" value={ses.role} onChange={async e => { const r = e.target.value as Role; if (await a.demoLogin(r)) nav(`/${r}/dashboard`) }}>
+                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <button className="btn" onClick={resetDemo}>Reset demo</button>
+            </>}
             <button className="btn" onClick={() => { a.logout(); nav('/') }}>Log out</button>
           </span>
         </header>

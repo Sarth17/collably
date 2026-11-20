@@ -16,3 +16,4 @@ collably.db
 *.sqlite3
 
 uploads/
+.vercel/
