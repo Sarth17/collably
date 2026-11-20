@@ -6,10 +6,16 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
-from db import Base, Brand, Campaign, Collab, Creator, Deliverable, Message, Notice, Portfolio, Report, Saved, User, engine
+from db import Base, Brand, Campaign, Collab, Creator, DEMO_SCHEMA, Deliverable, HOSTED_DEMO_ENABLED, Message, Notice, Portfolio, Report, Saved, User, engine
 from security import hash_pw
 
 DEMO_ENABLED = os.getenv("VERCEL") != "1" and os.getenv("COLLABLY_DEV", "1") == "1"
+DEMO_USERS = (
+    ("u1", "demo-brand@collably.test", "brand", "b1"),
+    ("u2", "demo-creator@collably.test", "creator", "c1"),
+    ("u3", "demo-admin@collably.test", "admin", "admin"),
+)
+DEMO_EMAILS = {email for _, email, _, _ in DEMO_USERS}
 
 RAW = [
     ("Priya Mehta", "priyamehta", "Beauty", "Mumbai", ["Instagram", "YouTube"], 182000, 5.4, "Skincare routines and honest product reviews."),
@@ -64,12 +70,11 @@ def rows():
         ("r1", "Creator: Dev Malhotra", "Missing sponsorship disclosure", "high"), ("r2", "Campaign: Trail Season", "Repeated unsolicited invitations", "medium"),
         ("r3", "Brand: FreshBowl", "Slow replies to creators", "low")]]
     out.append(Saved(brandId="b1", creatorId="c11"))
-    out += [User(id=i, email=e, passwordHash=hash_pw("demo1234"), role=r, profileId=p, emailVerified=True) for i, e, r, p in [
-        ("u1", "demo-brand@collably.test", "brand", "b1"), ("u2", "demo-creator@collably.test", "creator", "c1"), ("u3", "demo-admin@collably.test", "admin", "admin")]]
+    out += [User(id=i, email=e, passwordHash=hash_pw("demo1234"), role=r, profileId=p, emailVerified=True) for i, e, r, p in DEMO_USERS]
     return out
 
 
-def init_schema(conn: Connection) -> None:
+def init_schema(conn: Connection, schema: str | None = None) -> None:
     Base.metadata.create_all(conn)
     inspector = inspect(conn)
     migrations = {
@@ -82,13 +87,14 @@ def init_schema(conn: Connection) -> None:
         "users": {"emailVerified": "BOOLEAN DEFAULT FALSE NOT NULL"},
     }
     for table, additions in migrations.items():
-        existing = {col["name"].lower(): col["name"] for col in inspector.get_columns(table)}
+        existing = {col["name"].lower(): col["name"] for col in inspector.get_columns(table, schema=schema)}
+        qualified_table = f"{schema}.{table}" if schema else table
         for column, definition in additions.items():
             previous = existing.get(column.lower())
             if previous and previous != column and conn.dialect.name == "postgresql":
-                conn.execute(text(f'ALTER TABLE {table} RENAME COLUMN "{previous}" TO "{column}"'))
+                conn.execute(text(f'ALTER TABLE {qualified_table} RENAME COLUMN "{previous}" TO "{column}"'))
             if not previous:
-                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN "{column}" {definition}'))
+                conn.execute(text(f'ALTER TABLE {qualified_table} ADD COLUMN "{column}" {definition}'))
                 if column == "emailVerified":
                     conn.execute(User.__table__.update().where(
                         User.email.like("demo-%@collably.test")
@@ -116,6 +122,11 @@ def init():
         init_schema(conn)
         if DEMO_ENABLED:
             seed_demo(conn)
+        if HOSTED_DEMO_ENABLED:
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DEMO_SCHEMA}"))
+            demo_conn = conn.execution_options(schema_translate_map={None: DEMO_SCHEMA})
+            init_schema(demo_conn, DEMO_SCHEMA)
+            seed_demo(demo_conn)
 
 
 def reset():

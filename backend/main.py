@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import seed
-from db import Brand, Campaign, Collab, Creator, Deliverable, EmailToken, Message, Notice, ON_VERCEL, Portfolio, Report, Saved, SessionLocal, Upload, User
+from db import Brand, Campaign, Collab, Creator, Deliverable, DemoSessionLocal, EmailToken, HOSTED_DEMO_ENABLED, Message, Notice, ON_VERCEL, Portfolio, Report, Saved, SessionLocal, Upload, User
 from security import check_pw, decode_token, hash_pw, make_token
 from email_service import send_email
 
@@ -87,24 +87,36 @@ def uid(prefix: str) -> str:
     return prefix + uuid.uuid4().hex[:8]
 
 
-def get_db():
+def primary_db():
     with SessionLocal() as db:
         yield db
 
 
-def me(creds: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)) -> User:
-    user_id = decode_token(creds.credentials) if creds else None
-    user = db.get(User, user_id) if user_id else None
+def identity(creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> tuple[str, bool] | None:
+    claims = decode_token(creds.credentials) if creds else None
+    if claims and claims[1] and not HOSTED_DEMO_ENABLED:
+        return None
+    return claims
+
+
+def get_db(claims: tuple[str, bool] | None = Depends(identity)):
+    factory = DemoSessionLocal if claims and claims[1] else SessionLocal
+    with factory() as db:
+        yield db
+
+
+def me(claims: tuple[str, bool] | None = Depends(identity), db: Session = Depends(get_db)) -> User:
+    user = db.get(User, claims[0]) if claims else None
     if not user:
         raise HTTPException(401, "Please sign in again")
     return user
 
 
-U, DB = Depends(me), Depends(get_db)
+U, DB, PRIMARY_DB = Depends(me), Depends(get_db), Depends(primary_db)
 
 
 @app.get("/api/health")
-def health(db: Session = DB):
+def health(db: Session = PRIMARY_DB):
     db.execute(text("SELECT 1"))
     return {"ok": True}
 
@@ -144,11 +156,24 @@ def upload_file(file: UploadFile = File(), u: User = U, db: Session = DB):
     filename = f"{uuid.uuid4().hex}{extension}"
     db.add(Upload(filename=filename, content_type=content_type, content=content))
     db.commit()
-    return {"filename": filename, "url": f"/uploads/{filename}"}
+    prefix = "/uploads/demo" if db.info.get("demo") else "/uploads"
+    return {"filename": filename, "url": f"{prefix}/{filename}"}
 
 
 @app.get("/uploads/{filename}")
-def uploaded_file(filename: str, db: Session = DB):
+def uploaded_file(filename: str, db: Session = PRIMARY_DB):
+    return upload_response(db, filename)
+
+
+@app.get("/uploads/demo/{filename}")
+def uploaded_demo_file(filename: str):
+    if not HOSTED_DEMO_ENABLED:
+        raise HTTPException(404, "File not found")
+    with DemoSessionLocal() as db:
+        return upload_response(db, filename)
+
+
+def upload_response(db: Session, filename: str):
     upload = db.get(Upload, filename)
     if upload is None:
         raise HTTPException(404, "File not found")
@@ -219,7 +244,7 @@ def invite(db: Session, kid: str, creator_id: str) -> None:
         db.add(l)
     notify(db, creator_id, f"{db.get(Brand, k.brandId).name} invited you to {k.name}", f"/creator/collaborations/{l.id}")
     user = db.query(User).filter(User.profileId == creator_id, User.role == "creator").first()
-    if user:
+    if user and not db.info.get("demo"):
         link = frontend_url(f"/creator/collaborations/{l.id}")
         send_email(user.email, f"You are invited to {k.name} on Collably", email_link_html("Campaign invitation", f"{db.get(Brand, k.brandId).name} invited you to collaborate on {k.name}.", link, "View invitation"))
 
@@ -238,21 +263,25 @@ class LoginIn(BaseModel):
 
 
 @app.post("/api/auth/login")
-def login(b: LoginIn, db: Session = DB):
-    u = db.query(User).filter(User.email == b.email.strip().lower()).first()
-
-    if not u or not check_pw(b.password, u.passwordHash):
-        raise HTTPException(401, "Wrong email or password")
-
-    if os.getenv("RESEND_API_KEY") and not u.emailVerified:
-        raise HTTPException(403, "Verify your email before signing in")
-    return {"token": make_token(u.id)}
+def login(b: LoginIn):
+    email = b.email.strip().lower()
+    demo = HOSTED_DEMO_ENABLED and email in seed.DEMO_EMAILS
+    factory = DemoSessionLocal if demo else SessionLocal
+    with factory() as db:
+        u = db.query(User).filter(User.email == email).first()
+        if not u or not check_pw(b.password, u.passwordHash):
+            raise HTTPException(401, "Wrong email or password")
+        if os.getenv("RESEND_API_KEY") and not u.emailVerified:
+            raise HTTPException(403, "Verify your email before signing in")
+        return {"token": make_token(u.id, demo=demo)}
 
 @app.post("/api/auth/register")
-def register(b: RegisterIn, db: Session = DB):
+def register(b: RegisterIn, db: Session = PRIMARY_DB):
     email = b.email.strip().lower()
     if email.count("@") != 1 or not all(email.split("@")) or any(c.isspace() for c in email):
         raise HTTPException(400, "Enter a valid email address")
+    if email in seed.DEMO_EMAILS:
+        raise HTTPException(409, "That email is reserved for a demo account")
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(409, "That email is already registered")
     pid = uid(b.role[0])
@@ -274,7 +303,7 @@ def register(b: RegisterIn, db: Session = DB):
     return {"ok": True, "verificationRequired": verification_required, "emailSent": email_sent}
 
 @app.get("/api/auth/verify-email")
-def verify_email(token: str, db: Session = DB):
+def verify_email(token: str, db: Session = PRIMARY_DB):
     user = consume_email_token(db, token, "verify")
     if not user:
         raise HTTPException(400, "This verification link is invalid or expired. Request a new one.")
@@ -296,7 +325,7 @@ def send_verification(db: Session, user: User) -> bool:
 
 
 @app.post("/api/auth/resend-verification")
-def resend_verification(b: EmailOnly, db: Session = DB):
+def resend_verification(b: EmailOnly, db: Session = PRIMARY_DB):
     if not os.getenv("RESEND_API_KEY"):
         raise HTTPException(503, "Verification email delivery is unavailable")
     user = db.query(User).filter(User.email == b.email.strip().lower()).first()
@@ -307,7 +336,7 @@ def resend_verification(b: EmailOnly, db: Session = DB):
 
 
 @app.post("/api/auth/forgot-password")
-def forgot_password(b: EmailOnly, db: Session = DB):
+def forgot_password(b: EmailOnly, db: Session = PRIMARY_DB):
     if not os.getenv("RESEND_API_KEY"):
         raise HTTPException(503, "Password reset email delivery is unavailable")
     user = db.query(User).filter(User.email == b.email.strip().lower()).first()
@@ -325,7 +354,7 @@ class ResetPasswordIn(BaseModel):
 
 
 @app.post("/api/auth/reset-password")
-def reset_password(b: ResetPasswordIn, db: Session = DB):
+def reset_password(b: ResetPasswordIn, db: Session = PRIMARY_DB):
     user = consume_email_token(db, b.token, "reset")
     if not user:
         raise HTTPException(400, "This reset link is invalid or expired. Request a new one.")
@@ -349,7 +378,10 @@ def state(u: User = U, db: Session = DB):
         campaigns = [k for k in campaigns if k.status == "active" or k.id in linked]
     cids = {l.id for l in collabs}
     return {
-        "session": {"role": role, "userId": pid},
+        "session": {
+            "role": role, "userId": pid,
+            "demo": bool(db.info.get("demo")) or (seed.DEMO_ENABLED and u.email in seed.DEMO_EMAILS),
+        },
         "creators": L(db.query(Creator).all()), "brands": L(db.query(Brand).all()),
         "campaigns": L(campaigns), "collabs": L(collabs),
         "deliverables": L(x for x in db.query(Deliverable).all() if x.collabId in cids),

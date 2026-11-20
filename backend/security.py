@@ -22,12 +22,17 @@ def check_pw(pw: str, stored: str) -> bool:
     return secrets.compare_digest(hash_pw(pw, stored.split("$")[0]), stored)
 
 
-def make_token(user_id: str) -> str:
-    return jwt.encode({"sub": user_id, "exp": int(time.time()) + 7 * 86400}, SECRET, algorithm="HS256")
+def make_token(user_id: str, demo: bool = False) -> str:
+    return jwt.encode(
+        {"sub": user_id, "demo": demo, "exp": int(time.time()) + 7 * 86400},
+        SECRET,
+        algorithm="HS256",
+    )
 
 
-def decode_token(token: str) -> str | None:
+def decode_token(token: str) -> tuple[str, bool] | None:
     try:
-        return jwt.decode(token, SECRET, algorithms=["HS256"])["sub"]
+        claims = jwt.decode(token, SECRET, algorithms=["HS256"], options={"require": ["sub", "exp"]})
+        return claims["sub"], claims.get("demo") is True
     except jwt.PyJWTError:
         return None

@@ -13,7 +13,7 @@ python -m uvicorn main:app --reload --port 8000
 
 From the repository root, run `npm ci` and `npm run dev`, then open http://localhost:5173.
 
-Local development defaults to SQLite and seeds fictional demo accounts. The sign-in page offers a brand, creator, and admin demo. Demo reset clears the local database. Set `COLLABLY_DEV=0` before starting the API to disable demo seeding and reset.
+Local development defaults to SQLite and seeds fictional demo accounts. Sign in as `demo-brand@collably.test`, `demo-creator@collably.test`, or `demo-admin@collably.test` with password `demo1234`. Demo reset clears the local database. Set `COLLABLY_DEV=0` before starting the API to disable demo seeding and reset.
 
 Run `python -m pytest` from `backend` and `npm run typecheck` and `npm run build` from the root.
 
@@ -22,7 +22,8 @@ Run `python -m pytest` from `backend` and `npm run typecheck` and `npm run build
 1. Link the repository root to a Vercel project. The Services configuration deploys Vite and FastAPI together on the same domain.
 2. Connect a new Neon Postgres resource to the project's production environment so Vercel injects `DATABASE_URL`. Keep the SSL parameters from the Neon connection string.
 3. Set the sensitive `COLLABLY_SECRET` environment variable to a randomly generated value of at least 32 characters.
-4. Run `vercel deploy --prod` from the root and check `/api/health` on the deployed domain. The API initializes its tables on startup. Production starts with an empty database.
+4. To offer the demo logins on the public site, set `VITE_COLLABLY_DEMO=1` in Vercel. Demo accounts use a separate Postgres schema with fictional data. Visitors share that demo, and the reset endpoint is disabled on Vercel.
+5. Run `vercel deploy --prod` from the root and check `/api/health` on the deployed domain. The API initializes its tables on startup.
 
 Portfolio and deliverable uploads persist in the configured database. The maximum is 4 MB on Vercel and 25 MB in local development. Use an external link for larger files.
 

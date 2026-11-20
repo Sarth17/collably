@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { Campaign, PortfolioItem, Role, State } from './types'
 
 const TOKEN = 'collably-token'
-export const SHOW_DEMO = import.meta.env.DEV
+export const SHOW_DEMO = import.meta.env.DEV || import.meta.env.VITE_COLLABLY_DEMO === '1'
 export const MAX_UPLOAD_MB = import.meta.env.PROD ? 4 : 25
 const DEMO_PASSWORD = 'demo1234'
 const DEMO: Record<Role, string> = { brand: 'demo-brand@collably.test', creator: 'demo-creator@collably.test', admin: 'demo-admin@collably.test' }

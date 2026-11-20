@@ -95,6 +95,7 @@ export function Login() {
         <button type="button" className="text-accent underline" onClick={resend}>Resend verification email</button>{verifyNotice && <p className="text-muted">{verifyNotice}</p>}
       </form>
       {SHOW_DEMO && <><p className="mt-8 text-sm font-medium">Or try a demo account (password demo1234)</p>
+      {import.meta.env.PROD && <p className="mt-1 text-sm text-muted">The demo is shared with other visitors. Use sample content.</p>}
       <div className="mt-3 space-y-3">
         {(['brand', 'creator', 'admin'] as Role[]).map(r => (
           <button key={r} className="card block w-full text-left" onClick={() => enter(a.demoLogin(r))}>

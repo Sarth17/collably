@@ -33,6 +33,14 @@ elif ON_VERCEL:
 
 engine = create_engine(url, pool_pre_ping=True, **engine_options)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+DEMO_SCHEMA = "collably_demo"
+HOSTED_DEMO_ENABLED = ON_VERCEL and os.getenv("VITE_COLLABLY_DEMO") == "1"
+DemoSessionLocal = sessionmaker(
+    bind=engine.execution_options(schema_translate_map={None: DEMO_SCHEMA}),
+    autoflush=False,
+    expire_on_commit=False,
+    info={"demo": True},
+)
 
 Base = declarative_base()
 def S(*a, **kw):

@@ -13,7 +13,7 @@ export interface Message { id: string; collabId: string; from: 'brand' | 'creato
 export interface Notice { id: string; to: string; text: string; link: string; read: boolean; at: string }
 export interface Report { id: string; target: string; reason: string; priority: 'low' | 'medium' | 'high'; status: 'open' | 'resolved' | 'dismissed' }
 export interface PortfolioItem { id: string; creatorId: string; title: string; description: string; category: string; platform: string; url: string; views: number }
-export interface Session { role: Role; userId: string }
+export interface Session { role: Role; userId: string; demo?: boolean }
 export interface State {
   session: Session | null
   creators: Creator[]; brands: Brand[]; campaigns: Campaign[]; collabs: Collab[]

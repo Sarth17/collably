@@ -50,11 +50,11 @@ function Shell() {
         <header className="shell-header flex flex-wrap items-center justify-between gap-2 px-6 py-4">
           <p className="font-display text-lg font-semibold">Good {h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening'}, {me.split(' ')[0]}</p>
           <span className="shell-actions flex gap-2">
-            {SHOW_DEMO && <>
+            {SHOW_DEMO && ses.demo && <>
               <select aria-label="Switch demo role" className="btn" value={ses.role} onChange={async e => { const r = e.target.value as Role; if (await a.demoLogin(r)) nav(`/${r}/dashboard`) }}>
                 {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
-              <button className="btn" onClick={resetDemo}>Reset demo</button>
+              {import.meta.env.DEV && <button className="btn" onClick={resetDemo}>Reset demo</button>}
             </>}
             <button className="btn" onClick={() => { a.logout(); nav('/') }}>Log out</button>
           </span>
